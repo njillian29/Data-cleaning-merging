@@ -1,0 +1,136 @@
+---
+title: "data-cleaning-merging"
+output: html_document
+date: "2025-06-16"
+---
+```{r}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(dplyr)
+library(fuzzyjoin)
+library(readr)
+setwd("~/Desktop/experimentpavlovia/data") 
+```
+
+```{r}
+#I'm defining a function, process_file, that reads each single pavlovia csv file, looks for the first available participant output, response time, and condition, and ensures that the prolific_id (stored in textbox_7) exists.
+
+process_file <- function(file_path) {                                     
+  df <- read_csv(file_path, show_col_types = FALSE) 
+  
+  possible_outputs <- c("textbox_2.text", "textbox_3.text", "textbox_4.text", "textbox_5.text")
+  possible_rt <- c("key_resp6.rt", "key_resp9.rt", "key_resp12.rt", "key_resp15.rt")
+  possible_condition <- c(
+    "human_high_gen_game.ran", 
+    "human_low_gen_game.ran", 
+    "ai_low_gen_game.ran", 
+    "ai_high_gen_game.ran"
+  )
+  
+  output_col <- possible_outputs[possible_outputs %in% names(df)][1]
+  rt_col <- possible_rt[possible_rt %in% names(df)][1]
+  available_conditions <- possible_condition[possible_condition %in% names(df)]
+
+if (is.na(output_col) || is.na(rt_col) || length(available_conditions) == 0 || !"textbox_7.text" %in% names(df)) {
+    message("Successfully removed incomplete reponse in: ", file_path)
+    return(NULL)
+  }
+  
+ # I'm creating a new, cleaner `condition` column based on which `.ran` column is non-NA. I'm also making sure it only does this for conditions that actually ran.
+df <- df %>%
+  mutate(
+    condition = apply(select(., all_of(available_conditions)), 1, function(row) {
+      matched <- available_conditions[which(!is.na(row))]
+      if (length(matched) == 1) matched else NA
+    })
+  )
+
+#In the code below, df_clean converts key columns (response time, participant output, and prolific ID to correct types and then selects only the relevant columns. I also am making sure that condition label is clean by removing _gen.game.ran. df_summary aggregates the cleaned data into one row per participant, and in addition to including prolific ID, date, and condition, creates average response time and average participant output columns.
+
+  df_clean <- df %>%
+    mutate(
+      participant_output = as.numeric(.data[[output_col]]),
+      response_time = as.numeric(.data[[rt_col]]),
+      prolific_id = as.character(`textbox_7.text`)
+    ) %>%
+    select(
+     prolific_id,
+      date,
+      participant_output,
+      running_total,
+      response_time,
+      condition
+    ) %>%
+      mutate(
+      prolific_id = as.character(prolific_id),
+      date = as.character(date),
+      running_total = as.character(running_total),
+      condition = sub("_gen_game\\.ran", "", condition)
+    ) %>%
+     mutate(
+    date_clean = as.Date(substr(date, 1, 10))  # extract just the YYYY-MM-DD
+  ) %>%
+  filter(date_clean >= as.Date("2025-04-03"))
+
+ df_summary <- df_clean %>%
+  reframe(
+    prolific_id = unique(prolific_id),
+    date = unique(date),
+    condition = unique(condition),
+    avg_output = mean(participant_output, na.rm = TRUE),
+    avg_response_time = mean(response_time, na.rm = TRUE),
+    valid_rounds = sum(!is.na(participant_output)),
+    .groups = "drop"
+  )
+return(df_summary)    
+}
+```
+
+```{r}
+#This code defines the folder where my experiment data is stored by assigning the file path. Then, it creates a list of all CSV files within that folder using the list.files() function. The pattern = "\\.csv$|\\.CSV$" argument tells R to look for files that end in either .csv or .CSV, making the search case-insensitive. The full.names = TRUE argument ensures that the result includes the full file paths (not just the filenames).
+
+
+folder_path <- "Desktop/experimentpavlovia/data"
+
+file_list <- list.files(
+  path = "/Users/jilliannestor/Desktop/experimentpavlovia/data", 
+  pattern = "\\.csv$|\\.CSV$", 
+  full.names = TRUE
+)
+```
+
+```{r}
+#This code loops through the full list of pavlovia CSV files, processes each one using the custom process_file() function defined above, and stores the cleaned results in a list. If a file is successfully processed (i.e., it returns something other than NULL), its output is added to the list; otherwise, the file is skipped with a message. After all files are processed, the individual results are combined into a single data frame using bind_rows(), and the final merged dataset is printed.
+
+all_data_list <- list()
+
+# Loop through each file
+for (i in seq_along(file_list)) {
+  file_path <- file_list[i]
+  print(file_path)
+  # Use your process_file function
+  processed_data <- suppressMessages(process_file(file_path))
+  
+if (!is.null(processed_data)) {
+all_data_list[[length(all_data_list) + 1]] <- processed_data
+} else {
+  message("Skipped: ", file_path)
+  }
+}
+  
+# Combine all the results into one data frame
+all_data_2 <- bind_rows(all_data_list)
+```
+
+```{r}
+#This is my final dataframe for the pavlovia files, called ready_df. I have asked R to only display the even rows, starting at row 2, because the prior data frame did have one duplicate entry per prolific id. I verified that all the entries with prolific IDs are indeed the even numbers so this is correct.  
+
+ready_df <- all_data_2 %>%
+  slice(seq(2, n(), by = 2))
+print(ready_df)
+
+```
+
+
+
